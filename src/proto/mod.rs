@@ -30,4 +30,5 @@ pub mod console;
 pub mod debug;
 pub mod loaded_image;
 pub mod media;
+pub mod net;
 pub mod pi;
