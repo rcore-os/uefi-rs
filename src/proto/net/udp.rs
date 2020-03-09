@@ -157,8 +157,10 @@ impl Udp4 {
     /// - BAD_BUFFER_SIZE   The data length is greater than the maximum UDP packet
     ///                     size. Or the length of the IP header + UDP header + data
     ///                     length is greater than MTU if DoNotFragment is TRUE.
-    pub fn transmit(&mut self, token: &mut CompletionToken) -> Result {
-        (self.transmit)(self, token).into()
+    pub fn transmit(&mut self, token: &mut TransmitToken) -> Result {
+        token.token.status = Status::NOT_READY;
+        token.pin();
+        (self.transmit)(self, &mut token.token).into()
     }
 
     /// Places an asynchronous receive request into the receiving queue.
@@ -172,8 +174,21 @@ impl Udp4 {
     /// is signaled. Providing a proper notification function and context for the event
     /// will enable the user to receive the notification and receiving status. That
     /// notification function is guaranteed to not be re-entered.
-    pub fn receive(&mut self, token: &mut CompletionToken) -> Result {
-        (self.receive)(self, token).into()
+    ///
+    /// # Errors
+    /// - SUCCESS           The receive completion token was cached.
+    /// - NOT_STARTED       This EFI UDPv4 Protocol instance has not been started.
+    /// - NO_MAPPING        When using a default address, configuration (DHCP, BOOTP, RARP, etc.)
+    ///                     is not finished yet.
+    /// - OUT_OF_RESOURCES  The receive completion token could not be queued due to a lack of system
+    ///                     resources (usually memory).
+    /// - DEVICE_ERROR      An unexpected system or network error occurred.
+    /// - ACCESS_DENIED     A receive completion token with the same Token.Event was already in
+    ///                     the receive queue.
+    /// - NOT_READY         The receive request could not be queued because the receive queue is full.
+    pub fn receive(&mut self, token: &mut ReceiveToken) -> Result {
+        token.token.status = Status::NOT_READY;
+        (self.receive)(self, &mut token.token).into()
     }
 
     /// Aborts an asynchronous transmit or receive request.
@@ -185,8 +200,12 @@ impl Udp4 {
     /// signaled. If the token is not in one of the queues, which usually means that
     /// the asynchronous operation has completed, this function will not signal the
     /// token and EFI_NOT_FOUND is returned.
-    pub fn cancel(&mut self, token: &mut CompletionToken) -> Result {
-        (self.cancel)(self, token).into()
+    pub fn cancel_receive(&mut self, token: &mut ReceiveToken) -> Result {
+        (self.cancel)(self, &mut token.token).into()
+    }
+
+    pub fn cancel_transmit(&mut self, token: &mut TransmitToken) -> Result {
+        (self.cancel)(self, &mut token.token).into()
     }
 
     /// Polls for incoming data packets and processes outgoing data packets.
@@ -224,10 +243,10 @@ pub struct ConfigData {
 
     // Access Point
     pub use_default_address: bool,
-    pub station_address: Ipv4Address,
+    pub station_addr: Ipv4Address,
     pub subnet_mask: Ipv4Address,
     pub station_port: u16,
-    pub remote_address: Ipv4Address,
+    pub remote_addr: Ipv4Address,
     pub remote_port: u16,
 }
 
@@ -247,6 +266,7 @@ struct SimpleNetworkMode {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct SessionData {
     pub src_addr: Ipv4Address,
     pub src_port: u16,
@@ -255,9 +275,10 @@ pub struct SessionData {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct FragmentData {
-    pub length: u32,
-    pub buffer: *mut u8,
+    pub len: u32,
+    pub buf: *mut u8,
 }
 
 #[repr(C)]
@@ -265,28 +286,145 @@ pub struct ReceiveData {
     pub timestamp: Time,
     pub recycle_signal: Event,
     pub session: SessionData,
-    pub data_length: u32,
+    pub data_len: u32,
     pub fragment_count: u32,
     pub fragment_table: [FragmentData; 1],
 }
 
 #[repr(C)]
-pub struct TransmitData {
-    pub session: *mut SessionData,
-    pub gateway_address: *mut Ipv4Address,
-    pub data_length: u32,
-    pub fragment_count: u32,
-    pub fragment_table: [FragmentData; 1],
+struct TransmitData {
+    session: *mut SessionData,
+    gateway_addr: *mut Ipv4Address,
+    data_len: u32,
+    fragment_count: u32,
+    fragment_table: [FragmentData; 1],
 }
 
 #[repr(C)]
-pub struct CompletionToken {
-    pub event: Event,
-    pub status: Status,
+struct CompletionToken {
+    event: Event,
+    status: Status,
     /// *mut ReceiveData or TransmitData
-    pub packet: *mut u8,
+    packet: *mut u8,
 }
 
-// pub struct Token {
-//     raw: Box<CompletionToken>,
-// }
+impl AsRef<[u8]> for ReceiveData {
+    fn as_ref(&self) -> &[u8] {
+        let FragmentData { len, buf } = self.fragment_table[0];
+        unsafe { core::slice::from_raw_parts(buf, len as usize) }
+    }
+}
+
+pub struct TransmitToken {
+    token: CompletionToken,
+    packet: TransmitData,
+    session: Option<SessionData>,
+    gateway_addr: Option<Ipv4Address>,
+}
+
+impl TransmitToken {
+    pub fn new(event: Event) -> Self {
+        TransmitToken {
+            token: CompletionToken {
+                event,
+                status: Status::SUCCESS,
+                packet: core::ptr::null_mut(),
+            },
+            packet: TransmitData {
+                session: core::ptr::null_mut(),
+                gateway_addr: core::ptr::null_mut(),
+                data_len: 0,
+                fragment_count: 0,
+                fragment_table: [FragmentData {
+                    len: 0,
+                    buf: core::ptr::null_mut(),
+                }],
+            },
+            session: None,
+            gateway_addr: None,
+        }
+    }
+
+    pub fn status(&self) -> Status {
+        self.token.status
+    }
+
+    pub fn set_session(&mut self, session: SessionData) {
+        self.session = Some(session);
+    }
+
+    pub fn set_gateway(&mut self, gateway_addr: Ipv4Address) {
+        self.gateway_addr = Some(gateway_addr);
+    }
+
+    pub fn set_buffer(&mut self, buf: &[u8]) {
+        self.packet.data_len = buf.len() as u32;
+        self.packet.fragment_count = 1;
+        self.packet.fragment_table = [FragmentData {
+            len: buf.len() as u32,
+            buf: buf.as_ptr() as _,
+        }];
+    }
+
+    pub fn pin(&mut self) {
+        self.token.packet = &mut self.packet as *mut TransmitData as _;
+        self.packet.session = self
+            .session
+            .as_mut()
+            .map(|s| s as *mut _)
+            .unwrap_or(core::ptr::null_mut());
+        self.packet.gateway_addr = self
+            .gateway_addr
+            .as_mut()
+            .map(|s| s as *mut _)
+            .unwrap_or(core::ptr::null_mut());
+    }
+}
+
+impl Drop for TransmitToken {
+    fn drop(&mut self) {
+        assert_ne!(
+            self.token.status,
+            Status::NOT_READY,
+            "tramsmit token dropped when not completed"
+        );
+    }
+}
+
+pub struct ReceiveToken {
+    token: CompletionToken,
+}
+
+impl ReceiveToken {
+    pub fn new(event: Event) -> Self {
+        ReceiveToken {
+            token: CompletionToken {
+                event,
+                status: Status::SUCCESS,
+                packet: core::ptr::null_mut(),
+            },
+        }
+    }
+
+    pub fn status(&self) -> Status {
+        self.token.status
+    }
+
+    pub fn packet(&mut self) -> Option<&ReceiveData> {
+        if self.token.packet.is_null() {
+            None
+        } else {
+            Some(unsafe { &*(self.token.packet as *const ReceiveData) })
+        }
+    }
+}
+
+impl Drop for ReceiveToken {
+    fn drop(&mut self) {
+        assert_ne!(
+            self.token.status,
+            Status::NOT_READY,
+            "receive token dropped when not completed"
+        );
+    }
+}
