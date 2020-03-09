@@ -1,4 +1,4 @@
-//! UDP protocol.
+//! UDP4 protocol.
 
 use super::*;
 use crate::{
