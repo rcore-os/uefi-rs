@@ -142,6 +142,31 @@ impl Mtftp4 {
         (self.read_file)(self, &mut token).into_with_val(|| token.buffer_size)
     }
 
+    /// Sends a file to an MTFTPv4 server. (blocking)
+    ///
+    /// # Errors
+    /// - SUCCESS           The upload session has started.
+    /// - UNSUPPORTED       The operation is not supported by this implementation.
+    /// - INVALID_PARAMETER One or more parameters are invalid.
+    /// - UNSUPPORTED       One or more options in the Token.OptionList are in
+    ///                     the unsupported list of structure EFI_MTFTP4_MODE_DATA.
+    /// - NOT_STARTED       The EFI MTFTPv4 Protocol driver has not been started.
+    /// - NO_MAPPING        When using a default address, configuration (DHCP, BOOTP,
+    ///                     RARP, etc.) is not finished yet.
+    /// - ALREADY_STARTED   This Token is already being used in another MTFTPv4 session.
+    /// - OUT_OF_RESOURCES  Required system resources could not be allocated.
+    /// - ACCESS_DENIED     The previous operation has not completed yet.
+    /// - DEVICE_ERROR      An unexpected network error or system error occurred.
+    pub fn write_file(&mut self, filename: &str, buf: &[u8]) -> Result {
+        let mut token = Token {
+            filename: filename.as_ptr(),
+            buffer: buf.as_ptr() as _,
+            buffer_size: buf.len() as u64,
+            ..unsafe { core::mem::zeroed() }
+        };
+        (self.write_file)(self, &mut token).into()
+    }
+
     /// Polls for incoming data packets and processes outgoing data packets.
     ///
     /// # Errors
