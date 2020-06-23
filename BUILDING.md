@@ -5,11 +5,6 @@ UEFI applications are simple COFF (Windows) executables, with the special
 [Rust supports building UEFI applications](https://github.com/rust-lang/rust/pull/56769)
 though the `x86_64-unknown-uefi` target.
 
-## Prerequisites
-
-- [cargo-xbuild](https://github.com/rust-osdev/cargo-xbuild): this is essential
-  if you plan to do any sort of cross-platform / bare-bones Rust programming.
-
 ## Steps
 
 The following steps allow you to build a simple UEFI app.
@@ -27,7 +22,7 @@ The following steps allow you to build a simple UEFI app.
   [`compiler-builtins`](https://github.com/rust-lang/compiler-builtins) crate,
   to avoid linking errors.
 
-- Build using `cargo xbuild --target x86_64-unknown-uefi`.
+- Build using `cargo build -Z build-std=core,alloc --target x86_64-unknown-uefi`.
 
 - The `target` directory will contain a `x86_64-unknown-uefi` subdirectory,
   where you will find the `uefi_app.efi` file - a normal UEFI executable.

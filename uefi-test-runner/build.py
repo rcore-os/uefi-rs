@@ -55,36 +55,36 @@ def esp_dir():
     'Returns the directory where we will build the emulated UEFI system partition'
     return build_dir() / 'esp'
 
-def run_xtool(tool, *flags):
-    'Runs cargo-x<tool> with certain arguments.'
+def run_tool(tool, *flags):
+    'Runs cargo-<tool> with certain arguments.'
 
-    cmd = ['cargo', tool, '--target', SETTINGS['target'], *flags]
+    cmd = ['cargo', tool, '-Z', 'build-std=core,alloc', '--target', SETTINGS['target'], *flags]
 
     if SETTINGS['verbose']:
         print(' '.join(cmd))
 
     sp.run(cmd).check_returncode()
 
-def run_xbuild(*flags):
-    'Runs cargo-xbuild with certain arguments.'
-    run_xtool('xbuild', *flags)
+def run_build(*flags):
+    'Runs cargo-build with certain arguments.'
+    run_tool('build', *flags)
 
-def run_xclippy(*flags):
-    'Runs cargo-xclippy with certain arguments.'
-    run_xtool('xclippy', *flags)
+def run_clippy(*flags):
+    'Runs cargo-clippy with certain arguments.'
+    run_tool('clippy', *flags)
 
 def build(*test_flags):
     'Builds the tests and examples.'
 
-    xbuild_args = [
+    build_args = [
         '--package', 'uefi-test-runner',
         *test_flags,
     ]
 
     if SETTINGS['config'] == 'release':
-        xbuild_args.append('--release')
+        build_args.append('--release')
 
-    run_xbuild(*xbuild_args)
+    run_build(*build_args)
 
     # Copy the built test runner file to the right directory for running tests.
     built_file = build_dir() / 'uefi-test-runner.efi'
@@ -99,7 +99,7 @@ def build(*test_flags):
 def clippy():
     'Runs Clippy on all projects'
 
-    run_xclippy('--all')
+    run_clippy('--all')
 
 def doc():
     'Generates documentation for the library crates.'
